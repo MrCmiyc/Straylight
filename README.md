@@ -1,8 +1,23 @@
 # Straylight
 
-A small Windows agent plus tooling for observing and controlling home PCs over the LAN,
-reporting to **Home Assistant** over **MQTT**. Built for parental monitoring/control of a
-family gaming PC — presence, gentle messaging, schedule-driven blocking, and screen dimming.
+A non-invasive **presence, messaging, and voice-assistant bridge** for home PCs, reporting to
+**Home Assistant** over **MQTT**. It measures *that* someone is active — defeating AFK
+auto-clickers to keep that signal honest — not *what* they're doing. Send a quiet toast, let a
+voice assistant relay a question and collect the answer, and see screentime without reading
+anyone's screen. Designed for trust: **surface signals, never content.**
+
+Not a keylogger, not a screen-scraper. It's useful as a light household messaging layer, an
+away/idle sensor that an AFK bot can't fake, and — for parents of older teens — an honest basis
+for a screentime conversation that doesn't involve reading over anyone's shoulder.
+
+## Design principles
+- **Presence, not content.** Report *that* someone is present/active, never what they're
+  reading or watching. Idle uses real-vs-injected input detection, so an auto-clicker can't fake it.
+- **Non-disruptive.** A toast, not a chime. A voice assistant can ask a question and read the
+  answer back (`reply/<id>`) without interrupting a full-screen game.
+- **Signals, never content.** Any future content awareness (e.g. browser-cache screening) is
+  classified **locally** and surfaces only an **alarm + a greyed-out preview** in Home Assistant —
+  the raw content never leaves the machine and is never displayed.
 
 > Hostnames/names in docs are aliased: **`mqtt-host`** = the MQTT/DNS home server,
 > **`pc-1`** = the admin box, **`pc-2`/`pc-3`** = target machines.
