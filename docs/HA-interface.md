@@ -48,6 +48,11 @@ appear under Settings → Devices. Per-host slug replaces `<host>` below:
 > reconnect. **Messages must never be retained** — a retained message re-fires on every
 > agent restart/reboot.
 >
+> **Delivery (0.8.2+):** the agent subscribes `<host>/cmd/#` at **QoS1** with a **persistent
+> session** (stable client id `straylight-<node>`, clean-session off), so a command published while
+> it's briefly offline (nightly restart, reconnect) is queued by the broker and delivered on
+> return. **Publish commands with `qos: 1`** for that guarantee; QoS0 still works while connected.
+>
 > **Message formatting (0.6.0+) — tiny markdown subset:**
 > - `\n` → line break (type literal `\n` in HA's single-line box).
 > - Line starting with `- `, `* `, or `• ` (marker + a space) → bullet, rendered as `• `.
@@ -75,8 +80,8 @@ toast, no reply. Or JSON:
   "title":  "Parent",                  // optional header/caption (default "Message")
   "text":   "What's for dinner?",   // body; supports \n and the markdown subset
   "urgent": false,                  // true = forced popup, false = toast
-  "reply":  true,                   // true = show a text box
-  "buttons":[                       // optional; renders buttons (+ text box if reply:true)
+  "reply":  true,                   // free-text box (IGNORED when buttons are given)
+  "buttons":[                       // a fixed choice; when present there is NO text box
      { "id":"yes","name":"Yes","hint":"hover tooltip" },
      { "id":"no", "name":"No", "hint":"hover tooltip" }
   ]
@@ -86,18 +91,24 @@ toast, no reply. Or JSON:
 **Reply — agent → HA**, published **retained** to `<host>/reply/<id>` (id echoed):
 ```json
 {
-  "id":"dinner1", "button":"no", "button_name":"No",
-  "text":"pizza", "dismissed":false, "ts":"2026-07-02T21:43:02"
+  "id":"dinner1", "question":"What's for dinner?", "title":"Parent",
+  "button":"no", "button_name":"No", "text":"pizza",
+  "dismissed":false, "ts":"2026-07-02T21:43:02"
 }
 ```
+- `question` = the ask's text echoed back, so a log/voice reads "What's for dinner? → pizza"
+  without a lookup; `title` = the ask's title.
 - `button`/`button_name` = clicked button (or `null`); `text` = typed text (or `""`);
   `dismissed:true` if closed without answering.
 - **Retained**, so a bot/task that subscribes later still receives it — no missed replies.
 - **The consumer clears it after reading**: publish an empty payload with `retain=true` to
   `<host>/reply/<id>`.
 - Also emitted **non-retained** to `<host>/telemetry/reply` as a live event (optional dashboard sensor).
-- No `id` on the ask → no reply is published. The reply UI (text box / buttons) requires the
-  custom window (in progress); plain toast/popup messaging works today.
+- No `id` on the ask → no reply is published.
+- **The reply window (built, 0.8.2+):** non-urgent asks render as a **toast** bottom-right that
+  does not steal focus; `urgent:true` centers it and grabs focus instead. **Buttons are a fixed
+  choice — no text box**; a text box appears only for a free-text ask (`reply:true` with no
+  buttons). Renders real `**bold**` + bullets.
 
 ## Auto-discovered entities (per device)
 - **binary_sensor**: Active
