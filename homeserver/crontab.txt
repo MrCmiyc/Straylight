@@ -1,0 +1,5 @@
+CRON_TZ=America/New_York
+
+# Straylight: Discord block via Technitium DNS (replaces dead pihole-cron.sh schedule)
+0 1 * * * /home/user/straylight/discord-block.sh block >> /home/user/straylight/discord-schedule.log 2>&1
+30 5 * * * /home/user/straylight/discord-block.sh unblock >> /home/user/straylight/discord-schedule.log 2>&1

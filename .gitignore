@@ -1,0 +1,26 @@
+# build output
+bin/
+obj/
+.vs/
+*.user
+
+# tooling / editor
+.claude/
+.idea/
+
+# secrets and per-machine runtime state — NEVER commit
+*.token
+*.pass
+*.sav
+*.state
+*.now
+mqtt.json
+technitium.token
+brightness.*
+dimmed.*
+idlev2.*
+*.secret
+
+# os
+Thumbs.db
+desktop.ini
