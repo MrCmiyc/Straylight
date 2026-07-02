@@ -13,10 +13,13 @@ public sealed class Worker : BackgroundService
     bool _dimmed;
     bool _idleV2;
     int _brightness = -1;
+    FileSystemWatcher? _dimWatcher;    // instance fields so the GC can't collect the
+    FileSystemWatcher? _replyWatcher;  // watchers mid-run (locals would stop raising events)
     static readonly string DimStateFile = @"C:\ProgramData\Straylight\dimmed.state";
     static readonly string DimStopFile = @"C:\ProgramData\Straylight\dim.stop";
     static readonly string V2StateFile = @"C:\ProgramData\Straylight\idlev2.state";
     static readonly string BrightnessNowFile = @"C:\ProgramData\Straylight\brightness.now";
+    const string StateDir = @"C:\ProgramData\Straylight";
 
     public Worker(AgentConfig cfg, Mqtt mqtt, ILogger<Worker> log)
     {
@@ -47,14 +50,28 @@ public sealed class Worker : BackgroundService
         // reflect auto-wake promptly: the dim-watch writes dimmed.state=0 when real input restores brightness
         try
         {
-            var fsw = new FileSystemWatcher(@"C:\ProgramData\Straylight", "dimmed.state")
+            _dimWatcher = new FileSystemWatcher(@"C:\ProgramData\Straylight", "dimmed.state")
             { NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size, EnableRaisingEvents = true };
-            fsw.Changed += (_, _) =>
+            _dimWatcher.Changed += (_, _) =>
             {
                 try { if (File.ReadAllText(DimStateFile).Trim() == "0" && _dimmed) { _dimmed = false; _log.LogInformation("screen auto-woke (real input)"); _ = PublishStateAsync(CancellationToken.None); } }
                 catch { }
             };
         }
+        catch { }
+
+        // the reply window writes reply-<token>.json when the user answers/dismisses an ask;
+        // forward it to MQTT (retained per-id + a live event) and delete the file.
+        try
+        {
+            _replyWatcher = new FileSystemWatcher(StateDir, "reply-*.json")
+            { NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite, EnableRaisingEvents = true };
+            _replyWatcher.Created += (_, e) => _ = HandleReplyFileAsync(e.FullPath);
+        }
+        catch { }
+
+        // forward any reply files stranded while the service was down (or a missed event)
+        try { foreach (var f in Directory.GetFiles(StateDir, "reply-*.json")) _ = HandleReplyFileAsync(f); }
         catch { }
 
         var startDate = DateTime.Now.Date;
@@ -107,6 +124,62 @@ public sealed class Worker : BackgroundService
         return string.Join("\n", lines);
     }
 
+    static bool IsTrue(JsonElement e) =>
+        e.ValueKind == JsonValueKind.True
+        || (e.ValueKind == JsonValueKind.String && e.GetString()?.Trim().ToLowerInvariant() is "true" or "on" or "1")
+        || (e.ValueKind == JsonValueKind.Number && e.TryGetInt32(out var n) && n != 0);
+
+    // Hand an interactive ask to the session helper: write ask-<token>.json, launch --reply-window.
+    void LaunchReplyWindow(string id, string title, string text, bool urgent, bool reply, List<Dictionary<string, string?>>? buttons)
+    {
+        string token = Regex.Replace(id, "[^A-Za-z0-9_-]", "_");
+        if (token.Length == 0) token = "ask";
+        var ask = new Dictionary<string, object?>
+        {
+            ["id"] = id,
+            ["title"] = title,
+            ["text"] = text,
+            ["urgent"] = urgent,
+            ["reply"] = reply,
+            ["buttons"] = buttons,
+        };
+        try
+        {
+            Directory.CreateDirectory(StateDir);
+            File.WriteAllText(Path.Combine(StateDir, $"ask-{token}.json"), JsonSerializer.Serialize(ask));
+            SessionLauncher.Run(Environment.ProcessPath!, $"--reply-window {token}");
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "failed to launch reply window"); }
+    }
+
+    // Read a reply-<token>.json the window dropped and publish it: retained to <base>/reply/<id>
+    // (a late poller/bot still gets it) and a live event to <base>/telemetry/reply (dashboard).
+    async Task HandleReplyFileAsync(string path)
+    {
+        try
+        {
+            string content = "";
+            for (int i = 0; i < 10; i++)
+            {
+                try { content = File.ReadAllText(path); if (content.Trim().Length > 0) break; } catch { }
+                await Task.Delay(100);
+            }
+            if (content.Trim().Length == 0) return;
+
+            string id = "";
+            try { if (JsonDocument.Parse(content).RootElement.TryGetProperty("id", out var idp)) id = idp.GetString() ?? ""; }
+            catch { }
+
+            await _mqtt.EnsureConnectedAsync(CancellationToken.None);
+            if (!string.IsNullOrEmpty(id))
+                await _mqtt.PublishAsync($"{_cfg.BaseTopic}/reply/{id}", content, true, CancellationToken.None);
+            await _mqtt.PublishAsync($"{_cfg.BaseTopic}/telemetry/reply", content, false, CancellationToken.None);
+            _log.LogInformation("reply published (id={Id})", id);
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "handling reply file failed"); }
+        finally { try { File.Delete(path); } catch { } }
+    }
+
     async Task HandleCommandAsync(string topic, string payload)
     {
         var key = topic[(topic.LastIndexOf('/') + 1)..];
@@ -123,11 +196,15 @@ public sealed class Worker : BackgroundService
                 break;
 
             case "message":
-                // payload is either plain text (-> friendly toast) or JSON {"text":"..","urgent":true}.
+            {
+                // payload is either plain text (-> friendly toast) or JSON. JSON with an `id` and
+                // `reply`/`buttons` opens the interactive window; otherwise it's a toast/popup.
                 // strip a leading BOM/zero-width char too (some publishers prepend one).
                 var raw = (payload ?? "").Trim().TrimStart('﻿', '​').Trim();
                 if (raw.Length == 0) break;
                 string text = raw; bool urgent = false; string title = "Message";
+                string? id = null; bool reply = false;
+                List<Dictionary<string, string?>>? buttons = null;
                 if (raw.StartsWith("{"))
                 {
                     try
@@ -135,19 +212,41 @@ public sealed class Worker : BackgroundService
                         var root = JsonDocument.Parse(raw).RootElement;
                         if (root.TryGetProperty("text", out var t)) text = t.GetString() ?? "";
                         if (root.TryGetProperty("title", out var ti) && !string.IsNullOrWhiteSpace(ti.GetString())) title = ti.GetString()!;
-                        if (root.TryGetProperty("urgent", out var u))
-                            urgent = u.ValueKind == JsonValueKind.True
-                                     || (u.ValueKind == JsonValueKind.String && u.GetString()?.Trim().ToLowerInvariant() is "true" or "on" or "1");
+                        if (root.TryGetProperty("urgent", out var u)) urgent = IsTrue(u);
+                        if (root.TryGetProperty("id", out var idp)) id = idp.GetString();
+                        if (root.TryGetProperty("reply", out var rp)) reply = IsTrue(rp);
+                        if (root.TryGetProperty("buttons", out var bs) && bs.ValueKind == JsonValueKind.Array)
+                        {
+                            buttons = new();
+                            foreach (var b in bs.EnumerateArray())
+                                buttons.Add(new()
+                                {
+                                    ["id"] = b.TryGetProperty("id", out var x) ? x.GetString() : null,
+                                    ["name"] = b.TryGetProperty("name", out var y) ? y.GetString() : null,
+                                    ["hint"] = b.TryGetProperty("hint", out var z) ? z.GetString() : null,
+                                });
+                        }
                     }
-                    catch { text = raw; urgent = false; }
+                    catch { text = raw; urgent = false; id = null; reply = false; buttons = null; }
                 }
                 if (text.Trim().Length == 0) break;
                 text = text.Replace("\\r\\n", "\n").Replace("\\n", "\n"); // single-line box: \n -> line break
-                text = RenderMarkdown(text);
-                if (urgent) Notify.Popup(title, text);
-                else Notify.Toast(title, text);
-                _log.LogInformation("message delivered (urgent={U})", urgent);
+
+                bool interactive = !string.IsNullOrEmpty(id) && (reply || buttons is { Count: > 0 });
+                if (interactive)
+                {
+                    LaunchReplyWindow(id!, title, text, urgent, reply, buttons);
+                    _log.LogInformation("interactive ask launched (id={Id} reply={R} buttons={B})", id, reply, buttons?.Count ?? 0);
+                }
+                else
+                {
+                    var rendered = RenderMarkdown(text);
+                    if (urgent) Notify.Popup(title, rendered);
+                    else Notify.Toast(title, rendered);
+                    _log.LogInformation("message delivered (urgent={U})", urgent);
+                }
                 break;
+            }
 
             case "v2":
                 _idleV2 = (payload ?? "").Trim().ToUpperInvariant() is "ON" or "1" or "TRUE";

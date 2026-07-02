@@ -33,8 +33,10 @@ public sealed class Mqtt : IAsyncDisposable
 
         var b = new MqttClientOptionsBuilder()
             .WithTcpServer(cfg.Host, cfg.Port)
-            .WithClientId($"straylight-{cfg.NodeId}-{Guid.NewGuid():N}")
-            .WithCleanSession(true)
+            // stable client id + persistent session so the broker QUEUES commands published while
+            // the agent is briefly offline (nightly restart, reconnect) and delivers them on return.
+            .WithClientId($"straylight-{cfg.NodeId}")
+            .WithCleanSession(false)
             .WithWillTopic(cfg.StatusTopic)
             .WithWillPayload("offline")
             .WithWillRetain(true);
@@ -51,7 +53,7 @@ public sealed class Mqtt : IAsyncDisposable
         await _client.ConnectAsync(_options, ct);
         await PublishAsync(_cfg.StatusTopic, "online", true, ct);
         var sub = new MqttClientSubscribeOptionsBuilder()
-            .WithTopicFilter(f => f.WithTopic($"{_cfg.BaseTopic}/cmd/#"))
+            .WithTopicFilter(f => f.WithTopic($"{_cfg.BaseTopic}/cmd/#").WithAtLeastOnceQoS())
             .Build();
         await _client.SubscribeAsync(sub, ct);
         _log.LogInformation("MQTT connected to {Host}:{Port}, subscribed {Base}/cmd/#", _cfg.Host, _cfg.Port, _cfg.BaseTopic);
@@ -67,7 +69,7 @@ public sealed class Mqtt : IAsyncDisposable
         _log.LogInformation("MQTT discovery published ({Node})", _cfg.NodeId);
     }
 
-    async Task PublishAsync(string topic, string payload, bool retain, CancellationToken ct)
+    public async Task PublishAsync(string topic, string payload, bool retain, CancellationToken ct)
     {
         var msg = new MqttApplicationMessageBuilder()
             .WithTopic(topic).WithPayload(payload).WithRetainFlag(retain).Build();

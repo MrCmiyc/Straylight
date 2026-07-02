@@ -4,7 +4,8 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <OutputType>Exe</OutputType>
+    <OutputType>WinExe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>Straylight.Agent</RootNamespace>
     <AssemblyName>straylight-agent</AssemblyName>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

@@ -10,6 +10,7 @@ if (args.Length >= 1 && args[0] == "--brightness")
     return;
 }
 if (args.Length >= 1 && args[0] == "--dim-watch") { DimWatch.Run(); return; }
+if (args.Length >= 2 && args[0] == "--reply-window") { ReplyWindow.Run(args[1]); return; }
 if (args.Length >= 1 && args[0] == "--brightness-get")
 {
     try { File.WriteAllText(@"C:\ProgramData\Straylight\brightness.now", Monitors.GetBrightnessPercent().ToString()); } catch { }
