@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-  Collect lightweight usage telemetry for pc-2 and publish it to MQTT with Home
-  Assistant auto-discovery. Runs locally on pc-2 as a hidden SYSTEM scheduled task
+  Collect lightweight usage telemetry for a machine and publish it to MQTT with Home
+  Assistant auto-discovery. Runs locally on the target as a hidden SYSTEM scheduled task
   every 15 minutes. Read-only collection; dependency-free MQTT (raw TCP, no extra software).
 
 .DESCRIPTION
   Config (non-secret): C:\ProgramData\Straylight\mqtt.json
-    { "host":"mqtt-host","port":1883,"username":"the-child","tls":false,
-      "base_topic":"the-childpc","discovery_prefix":"homeassistant","device_name":"PC 2" }
+    { "host":"mqtt-host","port":1883,"username":"","tls":false,
+      "base_topic":"pc-2","discovery_prefix":"homeassistant","device_name":"PC 2" }
   Secret: C:\ProgramData\Straylight\mqtt.pass  (DPAPI LocalMachine-encrypted password)
 
   -Discovery   Force (re)publish of HA discovery config topics (retained). Otherwise
@@ -106,7 +106,7 @@ function Send-MqttBatch {
     try {
         # CONNECT
         $payload=New-Object System.Collections.Generic.List[byte]
-        $payload.AddRange((Convert-MqttStr ("the-childpc-"+([guid]::NewGuid().ToString('N').Substring(0,8)))))
+        $payload.AddRange((Convert-MqttStr ("pc-2-"+([guid]::NewGuid().ToString('N').Substring(0,8)))))
         $flags=0x02
         if($User){ $flags=$flags -bor 0x80; $payload.AddRange((Convert-MqttStr $User)) }
         if($Pass){ $flags=$flags -bor 0x40; $payload.AddRange((Convert-MqttStr $Pass)) }

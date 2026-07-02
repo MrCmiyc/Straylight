@@ -104,7 +104,7 @@ solves screenshots, idle detection, monitor control, and messaging together.**
 - **Per-app outbound block [K]:**
   ```powershell
   New-NetFirewallRule -DisplayName "block-discord" -Direction Outbound `
-    -Program "C:\Users\the-child\AppData\Local\Discord\app-1.0.9999\Discord.exe" `
+    -Program "C:\Users\<user>\AppData\Local\Discord\app-1.0.9999\Discord.exe" `
     -Action Block -Profile Any
   ```
 - **The Discord problem:** its exe lives under per-user `AppData\Local\Discord\app-<version>\`

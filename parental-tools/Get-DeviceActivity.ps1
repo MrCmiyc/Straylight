@@ -54,9 +54,9 @@ try {
 } catch {}
 
 # 3. Processes via PsExec -> file -> read over SMB
-$remoteCsv = "C:\Windows\Temp\the-childtl.csv"
+$remoteCsv = "C:\Windows\Temp\activity-tasklist.csv"
 & $PsExec "\\$ComputerName" -accepteula -n 10 cmd /c "tasklist /fo csv > $remoteCsv" 2>$null | Out-Null
-$share = "\\$ComputerName\c`$\Windows\Temp\the-childtl.csv"
+$share = "\\$ComputerName\c`$\Windows\Temp\activity-tasklist.csv"
 $running = @()
 if (Test-Path $share) {
     $procs = Import-Csv $share

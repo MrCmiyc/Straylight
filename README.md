@@ -36,10 +36,11 @@ for a screentime conversation that doesn't involve reading over anyone's shoulde
   - LocalSystem service + per-session helper (`CreateProcessAsUser`) for the session-bound bits
     (DDC, input hook) that a Session-0 service can't do directly.
 - **`agent/install-service.ps1`** — install/update the service locally or remotely (PsExec).
-- **PowerShell tooling** (repo root) — Technitium DNS block scheduling, DoH disable on a client,
-  activity checks, and diagnostics (remote-access scan, AFK-app trace, DDC probes).
-- **`homeserver/`** — scripts that run on the MQTT/DNS home server (Technitium block toggling,
-  DHCP lease lookups) driven by cron.
+  The `agent/` folder also holds development probes (DDC/VCP, AFK-app trace, remote-access scan).
+- **`parental-tools/`** — optional, generic admin scripts a parent/operator can run by hand or
+  **push through the agent** once it's installed: disable DoH so a DNS blackhole can't be
+  bypassed, a scoped app-firewall example, and an agentless presence check. Resolver-agnostic —
+  bring your own DNS-block backend. See [parental-tools/README.md](parental-tools/README.md).
 - **`docs/`** — [HA-interface.md](docs/HA-interface.md) (the MQTT contract) and
   [INSTALL.md](docs/INSTALL.md) (build + local/remote install).
 
