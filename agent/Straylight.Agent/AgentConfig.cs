@@ -22,6 +22,7 @@ public sealed class AgentConfig
     public int IntervalSeconds { get; set; } = 900;       // 15 min
     public int IdleActiveSeconds { get; set; } = 300;     // <5 min idle = active
     public int NightlyRestartHour { get; set; } = 4;      // self-restart ~4am to shed leaks
+    public string UpdateBase { get; set; } = "";          // e.g. http://gibson.lan/straylight/ (self-update source)
 
     public string StateTopic => $"{BaseTopic}/telemetry/state";
     public string StatusTopic => $"{BaseTopic}/telemetry/status";

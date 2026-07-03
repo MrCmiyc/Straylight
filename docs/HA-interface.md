@@ -31,7 +31,8 @@ appear under Settings → Devices. Per-host slug replaces `<host>` below:
 | `process_count` | int | total processes |
 | `poll_interval_min` | int | current sample cadence, minutes |
 | `dimmed` | bool | screen-dim active (auto-clears when real input wakes it) |
-| `version` | string | agent build (e.g. `0.7.0`) |
+| `version` | string | agent build (e.g. `0.8.3`) |
+| `updating` | bool | true while a self-update is downloading/swapping (drives the HA update card's "Installing…") |
 | `idle_v2` | bool | real-input auto-wake enabled — required before Screen dim will engage |
 | `brightness` | int | current monitor brightness %, or `-1` if unreadable (no DDC / display off) |
 
@@ -43,6 +44,7 @@ appear under Settings → Devices. Per-host slug replaces `<host>` below:
 | `poll_interval` | integer minutes `5`–`60` (snaps to 5) | change sample cadence | yes |
 | `dim` | `ON`/`OFF` | screen dim (DDC brightness 0). **Requires `v2` ON**; auto-restores on real input | yes |
 | `v2` | `ON`/`OFF` | enable real-input auto-wake (the safety that lets dim be used) | yes |
+| `update` | `go` | download + verify + self-install the latest build (see **Self-update**) | **NO** |
 
 > Retain rule: **settings** (poll_interval, dim, v2) are retained so setpoints survive a
 > reconnect. **Messages must never be retained** — a retained message re-fires on every
@@ -110,6 +112,24 @@ toast, no reply. Or JSON:
   choice — no text box**; a text box appears only for a free-text ask (`reply:true` with no
   buttons). Renders real `**bold**` + bullets.
 
+## Self-update (0.8.3+)
+
+The agent updates itself from a LAN release host, driven by HA's native **update** entity.
+
+- **Release host** (e.g. `http://mqtt-host/straylight/`): serves `straylight-agent.exe`. Each
+  agent's `update_base` in `mqtt.json` points at it.
+- **Announce (retained):** publish `straylight/latest` =
+  `{"version":"0.8.4","sha256":"<hex>","notes":"…"}`. HA's update entity compares each host's
+  installed `version` against this; the sha is the integrity anchor. Use monotonic/semver versions.
+- **Install:** HA's Install button publishes `go` to `<host>/cmd/update` (qos 1).
+- **Agent applies:** downloads `update_base/straylight-agent.exe`, verifies its SHA-256 against the
+  sha from the **MQTT** `straylight/latest` (a *different* trust domain than the web host — so a
+  compromised web host alone can't push a malicious build), then a detached helper stops the
+  service, backs up the current exe (`.bak`), swaps in the new one, restarts, and **rolls back** if
+  it doesn't reach RUNNING.
+- **Idempotent:** already at `latest.version` → no-op, so a late-delivered (QoS1) update command is
+  safe. Progress surfaces via the `updating` telemetry field.
+
 ## Auto-discovered entities (per device)
 - **binary_sensor**: Active
 - **sensor**: Idle (unit s, duration), User, Session, Top App (+ full list as `apps` attribute),
@@ -117,6 +137,7 @@ toast, no reply. Or JSON:
 - **number**: Poll interval (5–60 min)
 - **text**: Message (type text and send → toast; for urgent, publish the JSON form)
 - **switch**: Screen dim (`switch.<host>_screen_dim`), Idle v2 (`switch.<host>_idle_v2`)
+- **update**: Agent update (`update.<host>_update`) — installed `version` vs `straylight/latest`, Install → `cmd/update`
 
 Entity IDs follow `<component>.<host>_<id>`, e.g. `text.pc_2_message`,
 `number.pc_2_poll_interval`, `binary_sensor.pc_2_active`, `sensor.pc_2_version`.

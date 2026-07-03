@@ -15,6 +15,7 @@ public sealed class Worker : BackgroundService
     int _brightness = -1;
     FileSystemWatcher? _dimWatcher;    // instance fields so the GC can't collect the
     FileSystemWatcher? _replyWatcher;  // watchers mid-run (locals would stop raising events)
+    bool _updating;                    // true while a self-update is downloading/swapping
     static readonly string DimStateFile = @"C:\ProgramData\Straylight\dimmed.state";
     static readonly string DimStopFile = @"C:\ProgramData\Straylight\dim.stop";
     static readonly string V2StateFile = @"C:\ProgramData\Straylight\idlev2.state";
@@ -109,7 +110,7 @@ public sealed class Worker : BackgroundService
     }
 
     Task PublishStateAsync(CancellationToken ct)
-        => _mqtt.PublishStateAsync(Telemetry.Collect(_cfg, _pollMinutes, _dimmed, _idleV2, _brightness), ct);
+        => _mqtt.PublishStateAsync(Telemetry.Collect(_cfg, _pollMinutes, _dimmed, _idleV2, _brightness, _updating), ct);
 
     // Tiny markdown subset for toast/popup: "- "/"* "/"• " -> bullet; strip inline **bold**; keep line breaks.
     static string RenderMarkdown(string s)
@@ -178,6 +179,54 @@ public sealed class Worker : BackgroundService
         }
         catch (Exception ex) { _log.LogWarning(ex, "handling reply file failed"); }
         finally { try { File.Delete(path); } catch { } }
+    }
+
+    // Self-update: verify the download against the sha in the *MQTT* straylight/latest (a different
+    // trust domain than the web host), then hand off to the detached swapper. Idempotent — a no-op
+    // if we're already at the latest version, so a late-delivered QoS1 update command is safe.
+    async Task UpdateAsync()
+    {
+        try
+        {
+            var latest = _mqtt.Latest;
+            if (latest is null) { _log.LogWarning("update: no straylight/latest known yet"); return; }
+            if (string.Equals(latest.Version, Telemetry.Version, StringComparison.OrdinalIgnoreCase))
+            { _log.LogInformation("update: already at {V}", Telemetry.Version); return; }
+            if (string.IsNullOrWhiteSpace(_cfg.UpdateBase)) { _log.LogWarning("update: no update_base configured"); return; }
+            if (string.IsNullOrWhiteSpace(latest.Sha256)) { _log.LogWarning("update: straylight/latest has no sha256; refusing"); return; }
+
+            _updating = true;
+            try { await PublishStateAsync(CancellationToken.None); } catch { }   // HA shows "Installing…"
+
+            string url = _cfg.UpdateBase.TrimEnd('/') + "/straylight-agent.exe";
+            string newExe = Path.Combine(StateDir, "straylight-agent.new.exe");
+            _log.LogInformation("update: downloading {Url} for {V}", url, latest.Version);
+            using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
+                await File.WriteAllBytesAsync(newExe, await http.GetByteArrayAsync(url));
+
+            string got = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(newExe))).ToLowerInvariant();
+            if (!string.Equals(got, latest.Sha256.Trim().ToLowerInvariant(), StringComparison.Ordinal))
+            {
+                _log.LogError("update: sha256 mismatch (want {Want} got {Got}); aborting", latest.Sha256, got);
+                try { File.Delete(newExe); } catch { }
+                _updating = false; try { await PublishStateAsync(CancellationToken.None); } catch { }
+                return;
+            }
+
+            _log.LogInformation("update: sha verified, launching swap {From} -> {To}", Telemetry.Version, latest.Version);
+            if (!Updater.Run(newExe))
+            {
+                _log.LogError("update: failed to launch swapper");
+                _updating = false; try { await PublishStateAsync(CancellationToken.None); } catch { }
+            }
+            // success: the detached swapper stops this service and swaps the exe; nothing more here.
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "update failed");
+            _updating = false; try { await PublishStateAsync(CancellationToken.None); } catch { }
+        }
     }
 
     async Task HandleCommandAsync(string topic, string payload)
@@ -272,6 +321,10 @@ public sealed class Worker : BackgroundService
                 try { File.WriteAllText(DimStateFile, _dimmed ? "1" : "0"); } catch { }
                 _log.LogInformation("screen dim -> {On}", _dimmed);
                 try { await PublishStateAsync(CancellationToken.None); } catch { }
+                break;
+
+            case "update":
+                _ = UpdateAsync();   // fire-and-forget; handles its own errors + progress flag
                 break;
 
             default:

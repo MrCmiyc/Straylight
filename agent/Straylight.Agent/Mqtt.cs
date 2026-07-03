@@ -8,6 +8,9 @@ namespace Straylight.Agent;
 /// MQTT client (MQTTnet): retained state + HA discovery, Last-Will availability, and a
 /// command channel (subscribes &lt;base&gt;/cmd/# and raises OnCommand(topic, payload)).
 /// </summary>
+/// <summary>A release announced on the retained `straylight/latest` topic.</summary>
+public sealed record LatestRelease(string Version, string Sha256, string? Notes);
+
 public sealed class Mqtt : IAsyncDisposable
 {
     readonly AgentConfig _cfg;
@@ -18,6 +21,9 @@ public sealed class Mqtt : IAsyncDisposable
     /// <summary>Raised for each message on &lt;base&gt;/cmd/# . Args: (topic, payload).</summary>
     public Func<string, string, Task>? OnCommand;
 
+    /// <summary>Latest release announced on the retained `straylight/latest` topic (or null).</summary>
+    public LatestRelease? Latest { get; private set; }
+
     public Mqtt(AgentConfig cfg, ILogger<Mqtt> log)
     {
         _cfg = cfg;
@@ -25,9 +31,24 @@ public sealed class Mqtt : IAsyncDisposable
         _client = new MqttFactory().CreateMqttClient();
         _client.ApplicationMessageReceivedAsync += async e =>
         {
+            var topic = e.ApplicationMessage.Topic;
+            var payload = e.ApplicationMessage.ConvertPayloadToString() ?? "";
+            if (topic == "straylight/latest")
+            {
+                try
+                {
+                    var j = JsonDocument.Parse(payload).RootElement;
+                    var v = j.TryGetProperty("version", out var vv) ? vv.GetString() : null;
+                    var s = j.TryGetProperty("sha256", out var ss) ? ss.GetString() : null;
+                    var n = j.TryGetProperty("notes", out var nn) ? nn.GetString() : null;
+                    if (!string.IsNullOrWhiteSpace(v)) Latest = new LatestRelease(v!, s ?? "", n);
+                }
+                catch (Exception ex) { _log.LogWarning(ex, "bad straylight/latest payload"); }
+                return;
+            }
             var h = OnCommand;
             if (h is null) return;
-            try { await h(e.ApplicationMessage.Topic, e.ApplicationMessage.ConvertPayloadToString() ?? ""); }
+            try { await h(topic, payload); }
             catch (Exception ex) { _log.LogWarning(ex, "command handler threw"); }
         };
 
@@ -54,9 +75,10 @@ public sealed class Mqtt : IAsyncDisposable
         await PublishAsync(_cfg.StatusTopic, "online", true, ct);
         var sub = new MqttClientSubscribeOptionsBuilder()
             .WithTopicFilter(f => f.WithTopic($"{_cfg.BaseTopic}/cmd/#").WithAtLeastOnceQoS())
+            .WithTopicFilter(f => f.WithTopic("straylight/latest").WithAtLeastOnceQoS())
             .Build();
         await _client.SubscribeAsync(sub, ct);
-        _log.LogInformation("MQTT connected to {Host}:{Port}, subscribed {Base}/cmd/#", _cfg.Host, _cfg.Port, _cfg.BaseTopic);
+        _log.LogInformation("MQTT connected to {Host}:{Port}, subscribed {Base}/cmd/# + straylight/latest", _cfg.Host, _cfg.Port, _cfg.BaseTopic);
     }
 
     public Task PublishStateAsync(TelemetrySnapshot s, CancellationToken ct)
@@ -158,6 +180,27 @@ internal static class Discovery
             foreach (var kv in d.extra) o[kv.Key] = kv.Value;
             yield return (d.comp, d.id, JsonSerializer.Serialize(o));
         }
+
+        // native HA update entity: installed version + in-progress come from telemetry, latest from
+        // the shared retained straylight/latest topic; install fires <base>/cmd/update.
+        var updateCfg = new Dictionary<string, object>
+        {
+            ["name"] = "Agent update",
+            ["unique_id"] = $"{c.NodeId}_update",
+            ["state_topic"] = c.StateTopic,
+            ["value_template"] = "{{ {'installed_version': value_json.version, 'in_progress': value_json.updating} | tojson }}",
+            ["latest_version_topic"] = "straylight/latest",
+            ["latest_version_template"] = "{{ value_json.version }}",
+            ["command_topic"] = $"{cmd}/update",
+            ["payload_install"] = "go",
+            ["qos"] = 1,
+            ["title"] = "Straylight agent",
+            ["availability_topic"] = c.StatusTopic,
+            ["payload_available"] = "online",
+            ["payload_not_available"] = "offline",
+            ["device"] = dev
+        };
+        yield return ("update", "update", JsonSerializer.Serialize(updateCfg));
 
         // free-text "send the child a message" box (command-only: no state_topic)
         var textCfg = new Dictionary<string, object>

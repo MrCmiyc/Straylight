@@ -8,7 +8,7 @@ public record AppInfo(string name, long mem_mb);
 public record TelemetrySnapshot(
     string ts, bool online, string? user, string state,
     long? idle_seconds, bool active, string[] browsers,
-    AppInfo[] top_apps, int process_count, int poll_interval_min, bool dimmed, bool idle_v2, int brightness, string version);
+    AppInfo[] top_apps, int process_count, int poll_interval_min, bool dimmed, bool idle_v2, int brightness, string version, bool updating);
 
 /// <summary>
 /// Collects session/idle (via quser — works as SYSTEM and cross-session) and process info.
@@ -17,9 +17,9 @@ public record TelemetrySnapshot(
 public static class Telemetry
 {
     // Bump on each build so Home Assistant can show which machine runs which build.
-    public const string Version = "0.8.2";
+    public const string Version = "0.8.3";
 
-    public static TelemetrySnapshot Collect(AgentConfig cfg, int pollMinutes, bool dimmed, bool idleV2, int brightness)
+    public static TelemetrySnapshot Collect(AgentConfig cfg, int pollMinutes, bool dimmed, bool idleV2, int brightness, bool updating)
     {
         var (user, state, idle) = GetSession();
         var (apps, browsers, count) = GetProcesses();
@@ -27,7 +27,7 @@ public static class Telemetry
         return new TelemetrySnapshot(
             DateTime.Now.ToString("s"), true,
             string.IsNullOrEmpty(user) ? null : user, state,
-            idle, active, browsers, apps, count, pollMinutes, dimmed, idleV2, brightness, Version);
+            idle, active, browsers, apps, count, pollMinutes, dimmed, idleV2, brightness, Version, updating);
     }
 
     // ---- session / idle via quser ----
