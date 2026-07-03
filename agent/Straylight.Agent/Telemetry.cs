@@ -18,7 +18,7 @@ public record TelemetrySnapshot(
 public static class Telemetry
 {
     // Bump on each build so Home Assistant can show which machine runs which build.
-    public const string Version = "0.8.9";
+    public const string Version = "0.8.10";
 
     public static TelemetrySnapshot Collect(AgentConfig cfg, int pollMinutes, bool dimmed, bool idleV2, int brightness, bool updating, long? realIdleSeconds, string maxVersion, string updateLatest)
     {

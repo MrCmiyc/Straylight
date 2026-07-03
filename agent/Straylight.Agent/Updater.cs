@@ -27,20 +27,24 @@ try {
   Log 'swapper: stopping service'
   sc.exe stop $svc | Out-Null
   for($i=0;$i -lt 40;$i++){ if((State) -match 'STOPPED'){break}; Start-Sleep -Milliseconds 500 }
-  Copy-Item $bin $bak -Force
-  Copy-Item $new $bin -Force
-  Log 'swapper: swapped in new exe, starting'
+  # session helpers (idle-watch/dim-watch/reply-window) run from bin and keep the exe locked; kill
+  # them so the swap can replace it. (This is what stranded v2-enabled boxes on the old swapper.)
+  taskkill /f /im straylight-agent.exe 2>$null | Out-Null
+  Start-Sleep -Milliseconds 800
+  Copy-Item $bin $bak -Force -ErrorAction SilentlyContinue
+  $swapped=$false
+  for($i=0;$i -lt 20;$i++){ try { Copy-Item $new $bin -Force; $swapped=$true; break } catch { Start-Sleep -Milliseconds 500 } }
+  if($swapped){ Log 'swapper: swapped in new exe, starting' } else { Log 'swapper: swap failed (exe locked) -> restarting old build' }
   sc.exe start $svc | Out-Null
   $ok=$false; for($i=0;$i -lt 40;$i++){ if((State) -match 'RUNNING'){$ok=$true;break}; Start-Sleep -Milliseconds 500 }
-  if(-not $ok){
+  if($swapped -and -not $ok){
     Log 'swapper: new exe did not reach RUNNING -> rolling back'
-    sc.exe stop $svc | Out-Null; Start-Sleep -Seconds 2
-    Copy-Item $bak $bin -Force
-    sc.exe start $svc | Out-Null
+    sc.exe stop $svc | Out-Null; Start-Sleep -Seconds 2; taskkill /f /im straylight-agent.exe 2>$null | Out-Null; Start-Sleep -Milliseconds 800
+    Copy-Item $bak $bin -Force; sc.exe start $svc | Out-Null
     Log 'swapper: rolled back to previous exe'
-  } else { Log 'swapper: update OK' }
+  } elseif($swapped) { Log 'swapper: update OK' }
   Remove-Item $new -Force -ErrorAction SilentlyContinue
-} catch { Log ('swapper FAILED: ' + $_.Exception.Message) }
+} catch { Log ('swapper FAILED: ' + $_.Exception.Message); try { sc.exe start $svc | Out-Null } catch {} }
 schtasks.exe /delete /tn StraylightSelfUpdate /f 2>$null | Out-Null
 ";
 
