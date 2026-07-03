@@ -188,33 +188,26 @@ public sealed class Worker : BackgroundService
     {
         try
         {
-            var latest = _mqtt.Latest;
-            if (latest is null) { _log.LogWarning("update: no straylight/latest known yet"); return; }
-            if (string.Equals(latest.Version, Telemetry.Version, StringComparison.OrdinalIgnoreCase))
-            { _log.LogInformation("update: already at {V}", Telemetry.Version); return; }
-            if (string.IsNullOrWhiteSpace(_cfg.UpdateBase)) { _log.LogWarning("update: no update_base configured"); return; }
-            if (string.IsNullOrWhiteSpace(latest.Sha256)) { _log.LogWarning("update: straylight/latest has no sha256; refusing"); return; }
+            var decision = UpdateLogic.Plan(Telemetry.Version, _mqtt.Latest, _cfg.UpdateBase);
+            if (!decision.ShouldProceed) { _log.LogInformation("update: {Reason}", decision.Reason); return; }
 
             _updating = true;
             try { await PublishStateAsync(CancellationToken.None); } catch { }   // HA shows "Installing…"
 
-            string url = _cfg.UpdateBase.TrimEnd('/') + "/straylight-agent.exe";
             string newExe = Path.Combine(StateDir, "straylight-agent.new.exe");
-            _log.LogInformation("update: downloading {Url} for {V}", url, latest.Version);
+            _log.LogInformation("update: downloading {Url}", decision.Url);
             using (var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) })
-                await File.WriteAllBytesAsync(newExe, await http.GetByteArrayAsync(url));
+                await File.WriteAllBytesAsync(newExe, await http.GetByteArrayAsync(decision.Url!));
 
-            string got = Convert.ToHexString(
-                System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(newExe))).ToLowerInvariant();
-            if (!string.Equals(got, latest.Sha256.Trim().ToLowerInvariant(), StringComparison.Ordinal))
+            if (!UpdateLogic.ShaMatches(await File.ReadAllBytesAsync(newExe), decision.ExpectedSha))
             {
-                _log.LogError("update: sha256 mismatch (want {Want} got {Got}); aborting", latest.Sha256, got);
+                _log.LogError("update: sha256 mismatch; aborting");
                 try { File.Delete(newExe); } catch { }
                 _updating = false; try { await PublishStateAsync(CancellationToken.None); } catch { }
                 return;
             }
 
-            _log.LogInformation("update: sha verified, launching swap {From} -> {To}", Telemetry.Version, latest.Version);
+            _log.LogInformation("update: sha verified, launching swap {From} -> {To}", Telemetry.Version, _mqtt.Latest!.Version);
             if (!Updater.Run(newExe))
             {
                 _log.LogError("update: failed to launch swapper");

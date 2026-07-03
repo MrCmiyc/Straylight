@@ -8,9 +8,6 @@ namespace Straylight.Agent;
 /// MQTT client (MQTTnet): retained state + HA discovery, Last-Will availability, and a
 /// command channel (subscribes &lt;base&gt;/cmd/# and raises OnCommand(topic, payload)).
 /// </summary>
-/// <summary>A release announced on the retained `straylight/latest` topic.</summary>
-public sealed record LatestRelease(string Version, string Sha256, string? Notes);
-
 public sealed class Mqtt : IAsyncDisposable
 {
     readonly AgentConfig _cfg;
@@ -35,15 +32,9 @@ public sealed class Mqtt : IAsyncDisposable
             var payload = e.ApplicationMessage.ConvertPayloadToString() ?? "";
             if (topic == "straylight/latest")
             {
-                try
-                {
-                    var j = JsonDocument.Parse(payload).RootElement;
-                    var v = j.TryGetProperty("version", out var vv) ? vv.GetString() : null;
-                    var s = j.TryGetProperty("sha256", out var ss) ? ss.GetString() : null;
-                    var n = j.TryGetProperty("notes", out var nn) ? nn.GetString() : null;
-                    if (!string.IsNullOrWhiteSpace(v)) Latest = new LatestRelease(v!, s ?? "", n);
-                }
-                catch (Exception ex) { _log.LogWarning(ex, "bad straylight/latest payload"); }
+                var parsed = UpdateLogic.ParseManifest(payload);
+                if (parsed is not null) Latest = parsed;
+                else _log.LogWarning("ignored malformed straylight/latest payload");
                 return;
             }
             var h = OnCommand;
