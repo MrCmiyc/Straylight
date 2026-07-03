@@ -185,8 +185,9 @@ internal static class Discovery
             ["unique_id"] = $"{c.NodeId}_update",
             ["state_topic"] = c.StateTopic,
             ["value_template"] = "{{ {'installed_version': value_json.version, 'in_progress': value_json.updating} | tojson }}",
-            ["latest_version_topic"] = "straylight/latest",
-            ["latest_version_template"] = "{{ value_json.version }}",
+            // latest is the PER-HOST pin-aware target (update_latest), so a pinned box shows up-to-date
+            ["latest_version_topic"] = c.StateTopic,
+            ["latest_version_template"] = "{{ value_json.update_latest }}",
             ["command_topic"] = $"{cmd}/update",
             ["payload_install"] = "go",
             ["qos"] = 1,
@@ -212,5 +213,25 @@ internal static class Discovery
             ["device"] = dev
         };
         yield return ("text", "message", JsonSerializer.Serialize(textCfg));
+
+        // version pin: type a max version (or clear for no cap). Retained so it survives reconnects;
+        // the agent refuses to self-update above it, and the update card reflects it via update_latest.
+        var pinCfg = new Dictionary<string, object>
+        {
+            ["name"] = "Max version",
+            ["unique_id"] = $"{c.NodeId}_max_version",
+            ["command_topic"] = $"{cmd}/pin",
+            ["state_topic"] = c.StateTopic,
+            ["value_template"] = "{{ value_json.max_version }}",
+            ["retain"] = true,
+            ["max"] = 16,
+            ["icon"] = "mdi:lock-outline",
+            ["entity_category"] = "config",
+            ["availability_topic"] = c.StatusTopic,
+            ["payload_available"] = "online",
+            ["payload_not_available"] = "offline",
+            ["device"] = dev
+        };
+        yield return ("text", "max_version", JsonSerializer.Serialize(pinCfg));
     }
 }

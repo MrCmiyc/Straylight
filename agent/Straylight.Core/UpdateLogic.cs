@@ -25,7 +25,7 @@ public static class UpdateLogic
     /// Order matters: a no-manifest / no-config / already-current state must Skip before we ever
     /// look at the sha, and "already current" is what makes a late (QoS1) update command a safe no-op.
     /// </summary>
-    public static UpdateDecision Plan(string? currentVersion, LatestRelease? latest, string? updateBase)
+    public static UpdateDecision Plan(string? currentVersion, LatestRelease? latest, string? updateBase, string? maxVersion = null)
     {
         if (latest is null) return Skip("no straylight/latest manifest yet");
         if (string.IsNullOrWhiteSpace(latest.Version)) return Skip("manifest has no version");
@@ -33,7 +33,27 @@ public static class UpdateLogic
         if (string.Equals(latest.Version, currentVersion, StringComparison.OrdinalIgnoreCase))
             return Skip($"already at {currentVersion}");
         if (string.IsNullOrWhiteSpace(latest.Sha256)) return Skip("manifest has no sha256");
+        // version ceiling: never move above a pin (staged rollout / holding a box back)
+        if (!string.IsNullOrWhiteSpace(maxVersion) && CompareVersions(latest.Version, maxVersion!) > 0)
+            return Skip($"pinned at max {maxVersion} (latest {latest.Version})");
         return new(UpdateAction.Proceed, "update available", DownloadUrl(updateBase!), Normalize(latest.Sha256));
+    }
+
+    /// <summary>Semver-ish compare (x.y.z via System.Version; ordinal fallback). &gt;0 means a is newer.</summary>
+    public static int CompareVersions(string a, string b)
+        => System.Version.TryParse(a, out var va) && System.Version.TryParse(b, out var vb)
+            ? va.CompareTo(vb) : string.CompareOrdinal(a, b);
+
+    /// <summary>
+    /// The version a host should treat as its "latest available": the announced latest, but never
+    /// above the pin. If latest is above the pin the host can't install it, so report the current
+    /// version (HA then shows "up to date" rather than a phantom update it will refuse).
+    /// </summary>
+    public static string EffectiveLatest(string currentVersion, string? latestVersion, string? maxVersion)
+    {
+        if (string.IsNullOrWhiteSpace(latestVersion)) return currentVersion;
+        if (string.IsNullOrWhiteSpace(maxVersion)) return latestVersion!;
+        return CompareVersions(latestVersion!, maxVersion!) <= 0 ? latestVersion! : currentVersion;
     }
 
     /// <summary>Build the exe URL from a base that may or may not end in a slash.</summary>

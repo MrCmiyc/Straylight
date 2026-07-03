@@ -36,6 +36,8 @@ appear under Settings → Devices. Per-host slug replaces `<host>` below:
 | `dimmed` | bool | screen-dim active (auto-clears when real input wakes it) |
 | `version` | string | agent build (e.g. `0.8.3`) |
 | `updating` | bool | true while a self-update is downloading/swapping (drives the HA update card's "Installing…") |
+| `max_version` | string | version pin — the max this box will self-update to (`""` = no cap) |
+| `update_latest` | string | pin-aware "latest for this host"; the update card's `latest_version` reads this |
 | `idle_v2` | bool | when ON, a persistent low-level hook tracks real (non-injected) input → drives `idle_real_seconds`/`active` and enables Screen dim's auto-wake |
 | `brightness` | int | current monitor brightness %, or `-1` if unreadable (no DDC / display off) |
 
@@ -48,6 +50,7 @@ appear under Settings → Devices. Per-host slug replaces `<host>` below:
 | `dim` | `ON`/`OFF` | screen dim (DDC brightness 0). **Requires `v2` ON**; auto-restores on real input | yes |
 | `v2` | `ON`/`OFF` | enable real-input auto-wake (the safety that lets dim be used) | yes |
 | `update` | `go` | download + verify + self-install the latest build (see **Self-update**) | **NO** |
+| `pin` | version string (or empty) | cap self-updates at this max version; empty clears the cap | **yes** (retained) |
 
 > Retain rule: **settings** (poll_interval, dim, v2) are retained so setpoints survive a
 > reconnect. **Messages must never be retained** — a retained message re-fires on every
@@ -132,6 +135,9 @@ The agent updates itself from a LAN release host, driven by HA's native **update
   it doesn't reach RUNNING.
 - **Idempotent:** already at `latest.version` → no-op, so a late-delivered (QoS1) update command is
   safe. Progress surfaces via the `updating` telemetry field.
+- **Version pin:** publish a max version (retained) to `<host>/cmd/pin` to cap a box's self-updates
+  (staged rollout / hold a box back); empty clears it. The agent refuses to go above the pin and
+  reports `update_latest` (pin-aware) so the update card shows the truth, not a phantom update.
 
 ## Auto-discovered entities (per device)
 - **binary_sensor**: Active
@@ -139,7 +145,8 @@ The agent updates itself from a LAN release host, driven by HA's native **update
   Session, Top App (+ full list as `apps` attribute), Browsers, Processes, Brightness (%),
   Agent version (diagnostic)
 - **number**: Poll interval (5–60 min)
-- **text**: Message (type text and send → toast; for urgent, publish the JSON form)
+- **text**: Message (type text and send → toast; for urgent, publish the JSON form); Max version
+  (`text.<host>_max_version`) — type a version to cap self-updates, clear for no cap
 - **switch**: Screen dim (`switch.<host>_screen_dim`), Idle v2 (`switch.<host>_idle_v2`)
 - **update**: Agent update (`update.<host>_update`) — installed `version` vs `straylight/latest`, Install → `cmd/update`
 

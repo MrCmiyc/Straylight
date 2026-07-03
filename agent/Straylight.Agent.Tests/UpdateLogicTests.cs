@@ -124,4 +124,38 @@ public class UpdateLogicTests
         => Assert.True(UpdateLogic.ShaMatches(
             System.Array.Empty<byte>(),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"));
+
+    // ---------- Version pin / ceiling ----------
+
+    [Fact]
+    public void Plan_LatestWithinPin_Proceeds()
+        => Assert.True(UpdateLogic.Plan("0.8.6", new LatestRelease("0.8.8", "abc", null), Base, "0.8.8").ShouldProceed);
+
+    [Fact]
+    public void Plan_LatestAbovePin_Skips()
+    {
+        var d = UpdateLogic.Plan("0.8.8", new LatestRelease("0.9.0", "abc", null), Base, "0.8.8");
+        Assert.False(d.ShouldProceed);
+        Assert.Contains("pinned", d.Reason);
+    }
+
+    [Fact]
+    public void Plan_NoPin_ProceedsToLatest()
+        => Assert.True(UpdateLogic.Plan("0.8.6", new LatestRelease("0.9.0", "abc", null), Base, null).ShouldProceed);
+
+    [Theory]
+    [InlineData("0.8.8", "0.9.0", -1)]
+    [InlineData("0.9.0", "0.8.8", 1)]
+    [InlineData("0.8.8", "0.8.8", 0)]
+    [InlineData("0.10.0", "0.9.0", 1)]     // semver, not string ordinal ("0.10" < "0.9" as strings)
+    public void CompareVersions_IsSemver(string a, string b, int sign)
+        => Assert.Equal(sign, System.Math.Sign(UpdateLogic.CompareVersions(a, b)));
+
+    [Theory]
+    [InlineData("0.8.6", "0.9.0", null, "0.9.0")]     // no pin -> latest
+    [InlineData("0.8.6", "0.8.8", "0.8.8", "0.8.8")]  // latest == pin -> latest
+    [InlineData("0.8.6", "0.9.0", "0.8.8", "0.8.6")]  // latest > pin -> current (can't install past pin)
+    [InlineData("0.8.6", null, "0.8.8", "0.8.6")]     // no latest -> current
+    public void EffectiveLatest_RespectsPin(string cur, string? latest, string? pin, string expected)
+        => Assert.Equal(expected, UpdateLogic.EffectiveLatest(cur, latest, pin));
 }

@@ -26,6 +26,8 @@ public sealed class Worker : BackgroundService
     static readonly string HbFile = @"C:\ProgramData\Straylight\realinput.hb";
     static readonly string IdleWatchStopFile = @"C:\ProgramData\Straylight\idlewatch.stop";
     static readonly string ActiveSinceFile = @"C:\ProgramData\Straylight\active_since.state";
+    string _maxVersion = "";            // version pin: the max this box will self-update to ("" = no cap)
+    static readonly string MaxVersionFile = @"C:\ProgramData\Straylight\maxversion.state";
 
     public Worker(AgentConfig cfg, Mqtt mqtt, ILogger<Worker> log)
     {
@@ -51,6 +53,7 @@ public sealed class Worker : BackgroundService
         // survive a restart while dimmed (e.g. the nightly restart during bedtime): re-apply.
         try { _idleV2 = File.Exists(V2StateFile) && File.ReadAllText(V2StateFile).Trim() == "1"; } catch { }
         try { if (long.TryParse(File.Exists(ActiveSinceFile) ? File.ReadAllText(ActiveSinceFile).Trim() : "", out var av)) _activeSince = av; } catch { }
+        try { _maxVersion = File.Exists(MaxVersionFile) ? File.ReadAllText(MaxVersionFile).Trim() : ""; } catch { }
         if (_idleV2) { try { if (File.Exists(IdleWatchStopFile)) File.Delete(IdleWatchStopFile); } catch { } try { SessionLauncher.Run(Environment.ProcessPath!, "--idle-watch"); } catch { } }
         try { _dimmed = File.Exists(DimStateFile) && File.ReadAllText(DimStateFile).Trim() == "1"; } catch { }
         if (_dimmed) { try { if (File.Exists(DimStopFile)) File.Delete(DimStopFile); SessionLauncher.Run(Environment.ProcessPath!, "--dim-watch"); } catch { } }
@@ -119,7 +122,8 @@ public sealed class Worker : BackgroundService
     Task PublishStateAsync(CancellationToken ct)
     {
         EnsureIdleWatch();
-        var snap = Telemetry.Collect(_cfg, _pollMinutes, _dimmed, _idleV2, _brightness, _updating, RealIdleSeconds());
+        string updateLatest = UpdateLogic.EffectiveLatest(Telemetry.Version, _mqtt.Latest?.Version, _maxVersion);
+        var snap = Telemetry.Collect(_cfg, _pollMinutes, _dimmed, _idleV2, _brightness, _updating, RealIdleSeconds(), _maxVersion, updateLatest);
         // restart-robust active_since: stamp when the streak begins, keep it (incl. across restarts),
         // clear when inactive. Persisted so a self-update / nightly restart doesn't reset the session.
         long now = DateTimeOffset.Now.ToUnixTimeSeconds();
@@ -235,7 +239,7 @@ public sealed class Worker : BackgroundService
     {
         try
         {
-            var decision = UpdateLogic.Plan(Telemetry.Version, _mqtt.Latest, _cfg.UpdateBase);
+            var decision = UpdateLogic.Plan(Telemetry.Version, _mqtt.Latest, _cfg.UpdateBase, _maxVersion);
             if (!decision.ShouldProceed) { _log.LogInformation("update: {Reason}", decision.Reason); return; }
 
             _updating = true;
@@ -371,6 +375,13 @@ public sealed class Worker : BackgroundService
 
             case "update":
                 _ = UpdateAsync();   // fire-and-forget; handles its own errors + progress flag
+                break;
+
+            case "pin":
+                _maxVersion = (payload ?? "").Trim();
+                try { File.WriteAllText(MaxVersionFile, _maxVersion); } catch { }
+                _log.LogInformation("update pin -> {Pin}", string.IsNullOrEmpty(_maxVersion) ? "(none)" : _maxVersion);
+                try { await PublishStateAsync(CancellationToken.None); } catch { }
                 break;
 
             default:

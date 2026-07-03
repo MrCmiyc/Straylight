@@ -9,7 +9,7 @@ public record TelemetrySnapshot(
     string ts, bool online, string? user, string state,
     long? idle_seconds, bool active, string[] browsers,
     AppInfo[] top_apps, int process_count, int poll_interval_min, bool dimmed, bool idle_v2, int brightness, string version, bool updating,
-    long? idle_real_seconds, string idle_source, long? active_since);
+    long? idle_real_seconds, string idle_source, long? active_since, string max_version, string update_latest);
 
 /// <summary>
 /// Collects session/idle (via quser — works as SYSTEM and cross-session) and process info.
@@ -18,9 +18,9 @@ public record TelemetrySnapshot(
 public static class Telemetry
 {
     // Bump on each build so Home Assistant can show which machine runs which build.
-    public const string Version = "0.8.8";
+    public const string Version = "0.8.9";
 
-    public static TelemetrySnapshot Collect(AgentConfig cfg, int pollMinutes, bool dimmed, bool idleV2, int brightness, bool updating, long? realIdleSeconds)
+    public static TelemetrySnapshot Collect(AgentConfig cfg, int pollMinutes, bool dimmed, bool idleV2, int brightness, bool updating, long? realIdleSeconds, string maxVersion, string updateLatest)
     {
         var (user, state, idle) = GetSession();
         var (apps, browsers, count) = GetProcesses();
@@ -35,7 +35,8 @@ public static class Telemetry
             DateTime.Now.ToString("s"), true,
             string.IsNullOrEmpty(user) ? null : user, state,
             idle, active, browsers, apps, count, pollMinutes, dimmed, idleV2, brightness, Version, updating,
-            realIdleSeconds, source, null);   // active_since is stamped by the Worker (needs cross-cycle state)
+            realIdleSeconds, source, null,    // active_since is stamped by the Worker (needs cross-cycle state)
+            maxVersion, updateLatest);
     }
 
     // ---- session / idle via quser ----
