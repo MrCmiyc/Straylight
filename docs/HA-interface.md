@@ -24,8 +24,11 @@ appear under Settings → Devices. Per-host slug replaces `<host>` below:
 | `online` | bool | true while publishing |
 | `user` | string \| null | logged-in user (null if none) |
 | `state` | string | session state: `Active`, `Disc` (disconnected), `Idle`, ... |
-| `idle_seconds` | int \| null | seconds since last input (null = unknown) |
-| `active` | bool | Active session AND idle under threshold |
+| `idle_seconds` | int \| null | seconds since last input per **`quser`** (v1). Counts *injected* input, so an autoclicker keeps this near 0. |
+| `idle_real_seconds` | int \| null | seconds since last **real (non-injected) input**, from the idle_v2 watcher. `null` when v2 is off or the watcher isn't alive. An autoclicker does NOT reset this. |
+| `idle_source` | string | which idle drove `active`: `real-input` (v2 on + watcher live) or `quser` (fallback) |
+| `active` | bool | Active session AND the **decisive** idle (real-input when available, else quser) under threshold |
+| `active_since` | int \| null | epoch seconds when the current `active` streak began; persisted so it survives self-updates / nightly restarts (null when inactive) |
 | `browsers` | string[] | browsers currently running |
 | `top_apps` | array | top 5 by memory: `[{ "name": "...", "mem_mb": N }]` |
 | `process_count` | int | total processes |
@@ -33,7 +36,7 @@ appear under Settings → Devices. Per-host slug replaces `<host>` below:
 | `dimmed` | bool | screen-dim active (auto-clears when real input wakes it) |
 | `version` | string | agent build (e.g. `0.8.3`) |
 | `updating` | bool | true while a self-update is downloading/swapping (drives the HA update card's "Installing…") |
-| `idle_v2` | bool | real-input auto-wake enabled — required before Screen dim will engage |
+| `idle_v2` | bool | when ON, a persistent low-level hook tracks real (non-injected) input → drives `idle_real_seconds`/`active` and enables Screen dim's auto-wake |
 | `brightness` | int | current monitor brightness %, or `-1` if unreadable (no DDC / display off) |
 
 ## Commands (publish to `<host>/cmd/<name>`)
@@ -132,8 +135,9 @@ The agent updates itself from a LAN release host, driven by HA's native **update
 
 ## Auto-discovered entities (per device)
 - **binary_sensor**: Active
-- **sensor**: Idle (unit s, duration), User, Session, Top App (+ full list as `apps` attribute),
-  Browsers, Processes, Brightness (%), Agent version (diagnostic)
+- **sensor**: Idle (unit s, quser/v1), Real idle (unit s, real-input when v2 on), Idle source, User,
+  Session, Top App (+ full list as `apps` attribute), Browsers, Processes, Brightness (%),
+  Agent version (diagnostic)
 - **number**: Poll interval (5–60 min)
 - **text**: Message (type text and send → toast; for urgent, publish the JSON form)
 - **switch**: Screen dim (`switch.<host>_screen_dim`), Idle v2 (`switch.<host>_idle_v2`)

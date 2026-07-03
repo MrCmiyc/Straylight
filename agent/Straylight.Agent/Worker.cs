@@ -21,6 +21,11 @@ public sealed class Worker : BackgroundService
     static readonly string V2StateFile = @"C:\ProgramData\Straylight\idlev2.state";
     static readonly string BrightnessNowFile = @"C:\ProgramData\Straylight\brightness.now";
     const string StateDir = @"C:\ProgramData\Straylight";
+    long? _activeSince;                 // epoch secs when the current active streak began (survives restarts)
+    static readonly string RealInputFile = @"C:\ProgramData\Straylight\realinput.now";
+    static readonly string HbFile = @"C:\ProgramData\Straylight\realinput.hb";
+    static readonly string IdleWatchStopFile = @"C:\ProgramData\Straylight\idlewatch.stop";
+    static readonly string ActiveSinceFile = @"C:\ProgramData\Straylight\active_since.state";
 
     public Worker(AgentConfig cfg, Mqtt mqtt, ILogger<Worker> log)
     {
@@ -45,6 +50,8 @@ public sealed class Worker : BackgroundService
 
         // survive a restart while dimmed (e.g. the nightly restart during bedtime): re-apply.
         try { _idleV2 = File.Exists(V2StateFile) && File.ReadAllText(V2StateFile).Trim() == "1"; } catch { }
+        try { if (long.TryParse(File.Exists(ActiveSinceFile) ? File.ReadAllText(ActiveSinceFile).Trim() : "", out var av)) _activeSince = av; } catch { }
+        if (_idleV2) { try { if (File.Exists(IdleWatchStopFile)) File.Delete(IdleWatchStopFile); } catch { } try { SessionLauncher.Run(Environment.ProcessPath!, "--idle-watch"); } catch { } }
         try { _dimmed = File.Exists(DimStateFile) && File.ReadAllText(DimStateFile).Trim() == "1"; } catch { }
         if (_dimmed) { try { if (File.Exists(DimStopFile)) File.Delete(DimStopFile); SessionLauncher.Run(Environment.ProcessPath!, "--dim-watch"); } catch { } }
 
@@ -110,7 +117,47 @@ public sealed class Worker : BackgroundService
     }
 
     Task PublishStateAsync(CancellationToken ct)
-        => _mqtt.PublishStateAsync(Telemetry.Collect(_cfg, _pollMinutes, _dimmed, _idleV2, _brightness, _updating), ct);
+    {
+        EnsureIdleWatch();
+        var snap = Telemetry.Collect(_cfg, _pollMinutes, _dimmed, _idleV2, _brightness, _updating, RealIdleSeconds());
+        // restart-robust active_since: stamp when the streak begins, keep it (incl. across restarts),
+        // clear when inactive. Persisted so a self-update / nightly restart doesn't reset the session.
+        long now = DateTimeOffset.Now.ToUnixTimeSeconds();
+        if (snap.active) { if (_activeSince is null) { _activeSince = now; PersistActiveSince(); } }
+        else if (_activeSince is not null) { _activeSince = null; PersistActiveSince(); }
+        return _mqtt.PublishStateAsync(snap with { active_since = _activeSince }, ct);
+    }
+
+    void PersistActiveSince() { try { File.WriteAllText(ActiveSinceFile, _activeSince?.ToString() ?? ""); } catch { } }
+
+    // Seconds since the last REAL (non-injected) input, from the idle-watch helper; null when v2 is
+    // off or the watcher isn't alive (heartbeat stale) so telemetry falls back to quser.
+    long? RealIdleSeconds()
+    {
+        if (!_idleV2) return null;
+        try
+        {
+            long now = DateTimeOffset.Now.ToUnixTimeSeconds();
+            if (!File.Exists(HbFile) || !long.TryParse(File.ReadAllText(HbFile).Trim(), out var hb) || now - hb > 12) return null;
+            if (!File.Exists(RealInputFile) || !long.TryParse(File.ReadAllText(RealInputFile).Trim(), out var last)) return null;
+            return Math.Max(0, now - last);
+        }
+        catch { return null; }
+    }
+
+    // Keep the real-input watcher alive while v2 is on: relaunch if the heartbeat is stale. The
+    // helper's named mutex makes a redundant launch a no-op, so this is safe to call each cycle.
+    void EnsureIdleWatch()
+    {
+        if (!_idleV2) return;
+        bool alive = false;
+        try { alive = File.Exists(HbFile) && long.TryParse(File.ReadAllText(HbFile).Trim(), out var hb) && DateTimeOffset.Now.ToUnixTimeSeconds() - hb <= 12; } catch { }
+        if (!alive)
+        {
+            try { if (File.Exists(IdleWatchStopFile)) File.Delete(IdleWatchStopFile); } catch { }
+            try { SessionLauncher.Run(Environment.ProcessPath!, "--idle-watch"); } catch { }
+        }
+    }
 
     // Tiny markdown subset for toast/popup: "- "/"* "/"• " -> bullet; strip inline **bold**; keep line breaks.
     static string RenderMarkdown(string s)
@@ -293,7 +340,13 @@ public sealed class Worker : BackgroundService
             case "v2":
                 _idleV2 = (payload ?? "").Trim().ToUpperInvariant() is "ON" or "1" or "TRUE";
                 try { File.WriteAllText(V2StateFile, _idleV2 ? "1" : "0"); } catch { }
-                _log.LogInformation("idle v2 -> {On} (detection logic pending build)", _idleV2);
+                if (_idleV2)
+                {
+                    try { if (File.Exists(IdleWatchStopFile)) File.Delete(IdleWatchStopFile); } catch { }
+                    try { SessionLauncher.Run(Environment.ProcessPath!, "--idle-watch"); } catch { }   // real-input idle tracker
+                }
+                else { try { File.WriteAllText(IdleWatchStopFile, "1"); } catch { } }                  // stop the tracker
+                _log.LogInformation("idle v2 -> {On} (real-input idle tracker)", _idleV2);
                 try { await PublishStateAsync(CancellationToken.None); } catch { }
                 break;
 

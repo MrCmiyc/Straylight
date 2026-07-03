@@ -137,6 +137,11 @@ internal static class Discovery
                 new(){ ["icon"]="mdi:tag", ["entity_category"]="diagnostic" }),
             ("sensor","brightness","Brightness","{{ value_json.brightness }}",
                 new(){ ["unit_of_measurement"]="%", ["icon"]="mdi:brightness-6" }),
+            // idle_v2: real (non-injected) input idle + which detector drove `active`
+            ("sensor","idle_real","Real idle","{{ value_json.idle_real_seconds | default('') }}",
+                new(){ ["unit_of_measurement"]="s", ["device_class"]="duration", ["icon"]="mdi:account-clock" }),
+            ("sensor","idle_source","Idle source","{{ value_json.idle_source }}",
+                new(){ ["icon"]="mdi:radar" }),
 
             // writable control: HA number -> agent. command published RETAINED so we get the
             // last setpoint on connect. One cmd subtopic per setting; same shape for future controls.

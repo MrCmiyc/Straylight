@@ -8,7 +8,8 @@ public record AppInfo(string name, long mem_mb);
 public record TelemetrySnapshot(
     string ts, bool online, string? user, string state,
     long? idle_seconds, bool active, string[] browsers,
-    AppInfo[] top_apps, int process_count, int poll_interval_min, bool dimmed, bool idle_v2, int brightness, string version, bool updating);
+    AppInfo[] top_apps, int process_count, int poll_interval_min, bool dimmed, bool idle_v2, int brightness, string version, bool updating,
+    long? idle_real_seconds, string idle_source, long? active_since);
 
 /// <summary>
 /// Collects session/idle (via quser — works as SYSTEM and cross-session) and process info.
@@ -17,17 +18,24 @@ public record TelemetrySnapshot(
 public static class Telemetry
 {
     // Bump on each build so Home Assistant can show which machine runs which build.
-    public const string Version = "0.8.7";
+    public const string Version = "0.8.8";
 
-    public static TelemetrySnapshot Collect(AgentConfig cfg, int pollMinutes, bool dimmed, bool idleV2, int brightness, bool updating)
+    public static TelemetrySnapshot Collect(AgentConfig cfg, int pollMinutes, bool dimmed, bool idleV2, int brightness, bool updating, long? realIdleSeconds)
     {
         var (user, state, idle) = GetSession();
         var (apps, browsers, count) = GetProcesses();
-        bool active = state == "Active" && idle.HasValue && idle.Value < cfg.IdleActiveSeconds;
+        // With idle_v2 + a live real-input watcher, presence is decided by REAL (non-injected) input,
+        // so an autoclicker can't hold the box "active". Otherwise fall back to quser (v1). idle_seconds
+        // stays the quser value so the dashboard can see the divergence (quser 0 vs real climbing).
+        bool useReal = idleV2 && realIdleSeconds.HasValue;
+        long? decisive = useReal ? realIdleSeconds : idle;
+        string source = useReal ? "real-input" : "quser";
+        bool active = state == "Active" && decisive.HasValue && decisive.Value < cfg.IdleActiveSeconds;
         return new TelemetrySnapshot(
             DateTime.Now.ToString("s"), true,
             string.IsNullOrEmpty(user) ? null : user, state,
-            idle, active, browsers, apps, count, pollMinutes, dimmed, idleV2, brightness, Version, updating);
+            idle, active, browsers, apps, count, pollMinutes, dimmed, idleV2, brightness, Version, updating,
+            realIdleSeconds, source, null);   // active_since is stamped by the Worker (needs cross-cycle state)
     }
 
     // ---- session / idle via quser ----
