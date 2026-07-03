@@ -195,7 +195,7 @@ internal static class ReplyWindow
         }
         else
         {
-            var send = MakeButton("Send", Color.FromArgb(66, 133, 244));
+            var send = MakeButton("Send", Color.FromArgb(0, 150, 136));   // teal accent
             send.Click += (_, _) => Finish(true, null, null);
             buttonsRow.Controls.Add(send);
         }
